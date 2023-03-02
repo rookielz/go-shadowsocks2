@@ -1,0 +1,7 @@
+multi:
+  - port: 22345
+    password: 112233
+  - port: 22346
+    password: 112234
+  - port: 22347
+    password: 112235

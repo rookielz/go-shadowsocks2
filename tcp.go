@@ -93,7 +93,7 @@ func tcpLocal(addr, server string, shadow func(net.Conn) net.Conn, getAddr func(
 }
 
 // Listen on addr for incoming connections.
-func tcpRemote(addr string, shadow func(net.Conn) net.Conn) {
+func tcpRemote(addr string, shadow func(net.Conn) net.Conn, closeTcp chan int) {
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		logf("failed to listen on %s: %v", addr, err)
@@ -101,8 +101,25 @@ func tcpRemote(addr string, shadow func(net.Conn) net.Conn) {
 	}
 
 	logf("listening TCP on %s", addr)
+	needClose := false
+	go func(state *bool) {
+		select {
+		case _, ok := <-closeTcp:
+			if !ok {
+				logf("close tcp notify")
+				*state = true
+				connLocalTcp(addr)
+				return
+			}
+		}
+	}(&needClose)
 	for {
 		c, err := l.Accept()
+		if needClose {
+			_ = c.Close()
+			_ = l.Close()
+			break
+		}
 		if err != nil {
 			logf("failed to accept: %v", err)
 			continue
@@ -140,6 +157,7 @@ func tcpRemote(addr string, shadow func(net.Conn) net.Conn) {
 			}
 		}()
 	}
+	logf("close TCP on %s", addr)
 }
 
 // relay copies between left and right bidirectionally
@@ -202,4 +220,12 @@ func (w *corkedConn) Write(p []byte) (int, error) {
 		return w.bufw.Write(p)
 	}
 	return w.Conn.Write(p)
+}
+
+func connLocalTcp(addr string) {
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return
+	}
+	conn.Close()
 }

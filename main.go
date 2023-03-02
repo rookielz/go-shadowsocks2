@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"flag"
 	"fmt"
+	"github.com/shadowsocks/go-shadowsocks2/multiport"
 	"io"
 	"log"
 	"net/url"
@@ -24,26 +25,29 @@ var config struct {
 	TCPCork    bool
 }
 
+type Config struct {
+	Client     string
+	Server     string
+	Cipher     string
+	Key        string
+	Password   string
+	Keygen     int
+	Socks      string
+	RedirTCP   string
+	RedirTCP6  string
+	TCPTun     string
+	UDPTun     string
+	UDPSocks   bool
+	UDP        bool
+	TCP        bool
+	Plugin     string
+	PluginOpts string
+	MultiPort  bool
+}
+
 func main() {
 
-	var flags struct {
-		Client     string
-		Server     string
-		Cipher     string
-		Key        string
-		Password   string
-		Keygen     int
-		Socks      string
-		RedirTCP   string
-		RedirTCP6  string
-		TCPTun     string
-		UDPTun     string
-		UDPSocks   bool
-		UDP        bool
-		TCP        bool
-		Plugin     string
-		PluginOpts string
-	}
+	var flags Config
 
 	flag.BoolVar(&config.Verbose, "verbose", false, "verbose mode")
 	flag.StringVar(&flags.Cipher, "cipher", "AEAD_CHACHA20_POLY1305", "available ciphers: "+strings.Join(core.ListCipher(), " "))
@@ -64,6 +68,7 @@ func main() {
 	flag.BoolVar(&flags.TCP, "tcp", true, "(server-only) enable TCP support")
 	flag.BoolVar(&config.TCPCork, "tcpcork", false, "coalesce writing first few packets")
 	flag.DurationVar(&config.UDPTimeout, "udptimeout", 5*time.Minute, "UDP tunnel timeout")
+	flag.BoolVar(&flags.MultiPort, "multi", false, "(server-only) Enable multi port support")
 	flag.Parse()
 
 	if flags.Keygen > 0 {
@@ -149,34 +154,10 @@ func main() {
 		addr := flags.Server
 		cipher := flags.Cipher
 		password := flags.Password
-		var err error
-
-		if strings.HasPrefix(addr, "ss://") {
-			addr, cipher, password, err = parseURL(addr)
-			if err != nil {
-				log.Fatal(err)
-			}
-		}
-
-		udpAddr := addr
-
-		if flags.Plugin != "" {
-			addr, err = startPlugin(flags.Plugin, flags.PluginOpts, addr, true)
-			if err != nil {
-				log.Fatal(err)
-			}
-		}
-
-		ciph, err := core.PickCipher(cipher, key, password)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		if flags.UDP {
-			go udpRemote(udpAddr, ciph.PacketConn)
-		}
-		if flags.TCP {
-			go tcpRemote(addr, ciph.StreamConn)
+		if flags.MultiPort {
+			multiport.LoadFromYaml()
+		} else {
+			startServer(addr, cipher, password, key, flags)
 		}
 	}
 
@@ -184,6 +165,40 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
 	killPlugin()
+}
+
+func startServer(addr, cipher, password string, key []byte, flags Config) {
+	var err error
+
+	if strings.HasPrefix(addr, "ss://") {
+		addr, cipher, password, err = parseURL(addr)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	udpAddr := addr
+
+	if flags.Plugin != "" {
+		addr, err = startPlugin(flags.Plugin, flags.PluginOpts, addr, true)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	ciph, err := core.PickCipher(cipher, key, password)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if flags.UDP {
+		closeUdp := make(chan int)
+		go udpRemote(udpAddr, ciph.PacketConn, closeUdp)
+	}
+	if flags.TCP {
+		closeTcp := make(chan int)
+		go tcpRemote(addr, ciph.StreamConn, closeTcp)
+	}
 }
 
 func parseURL(s string) (addr, cipher, password string, err error) {

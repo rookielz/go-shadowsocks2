@@ -119,7 +119,7 @@ func udpSocksLocal(laddr, server string, shadow func(net.PacketConn) net.PacketC
 }
 
 // Listen on addr for encrypted packets and basically do UDP NAT.
-func udpRemote(addr string, shadow func(net.PacketConn) net.PacketConn) {
+func udpRemote(addr string, shadow func(net.PacketConn) net.PacketConn, closeUdp chan int) {
 	c, err := net.ListenPacket("udp", addr)
 	if err != nil {
 		logf("UDP remote listen error: %v", err)
@@ -130,15 +130,27 @@ func udpRemote(addr string, shadow func(net.PacketConn) net.PacketConn) {
 
 	nm := newNATmap(config.UDPTimeout)
 	buf := make([]byte, udpBufSize)
-
+	state := false
+	go func(closeState *bool) {
+		select {
+		case _, ok := <-closeUdp:
+			if !ok {
+				logf("close udp notify")
+				*closeState = true
+				connLocalUdp(addr)
+			}
+		}
+	}(&state)
 	logf("listening UDP on %s", addr)
 	for {
 		n, raddr, err := c.ReadFrom(buf)
+		if state {
+			break
+		}
 		if err != nil {
 			logf("UDP remote read error: %v", err)
 			continue
 		}
-
 		tgtAddr := socks.SplitAddr(buf[:n])
 		if tgtAddr == nil {
 			logf("failed to split target address from packet: %q", buf[:n])
@@ -170,6 +182,7 @@ func udpRemote(addr string, shadow func(net.PacketConn) net.PacketConn) {
 			continue
 		}
 	}
+	logf("close udp %s", addr)
 }
 
 // Packet NAT table
@@ -250,4 +263,13 @@ func timedCopy(dst net.PacketConn, target net.Addr, src net.PacketConn, timeout 
 			return err
 		}
 	}
+}
+
+func connLocalUdp(addr string) {
+	conn, err := net.Dial("udp", addr)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	conn.Write([]byte("close"))
 }
