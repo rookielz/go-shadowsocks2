@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/shadowsocks/go-shadowsocks2/multiport"
 	"net"
 	"sync"
 	"testing"
@@ -56,8 +57,8 @@ func TestUdp(t *testing.T) {
 	if err != nil {
 		return
 	}
-	defer conn.Close()
-	conn.Write([]byte("close"))
+	_, _ = conn.Write([]byte("close"))
+	_ = conn.Close()
 }
 
 func TestConfig(t *testing.T) {
